@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { ObjectId } from 'mongodb'
 import { appUsersCol } from '@/models/AppUser'
 import { announcementsCol } from '@/models/Announcement'
 import type { AnnouncementAudience, AnnouncementType } from '@/models/Announcement'
 import { appUpdatesCol } from '@/models/AppUpdate'
+import { badgesCol } from '@/models/Badge'
+import type { BadgeType } from '@/models/Badge'
+import { bansCol } from '@/models/Ban'
+import { premiumGrantsCol } from '@/models/PremiumGrant'
 import {
   setUserBadge,
   setUserPremium,
+  updateUserProfile,
   UserNotFoundError,
 } from '@/lib/app-writes'
 import { BanActionError, createBanRecord, revokeBanRecord } from '@/lib/ban-actions'
+import { connectAppDB } from '@/lib/db'
 import { joinedFromObjectId, toPlain } from '@/lib/serialize'
 
 /**
@@ -22,6 +29,8 @@ export const dynamic = 'force-dynamic'
 const TYPES = ['info', 'warning', 'success', 'error']
 const AUDIENCES = ['all', 'free', 'premium']
 const PLANS = ['monthly', 'yearly', 'lifetime']
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+const BADGE_TYPES = ['role', 'achievement', 'special', 'verification']
 
 type ActionDef = {
   name: string
@@ -100,6 +109,124 @@ const ACTIONS: ActionDef[] = [
     description: 'Cabut ban/suspend berdasar ID riwayat.',
     params: { id: 'string* (ID dokumen ban)' },
   },
+  {
+    name: 'users.list',
+    description: 'Daftar user aplikasi + filter + pagination (seperti halaman Pengguna).',
+    params: {
+      search: 'string opsional (email/nama/username/uid)',
+      status: 'active|suspended|banned opsional',
+      premium: 'boolean opsional (true=premium saja)',
+      page: 'number (default 1)',
+      limit: 'number 1-50 (default 20)',
+    },
+  },
+  {
+    name: 'users.detail',
+    description: 'Detail satu user + jumlah bookmark & riwayat nonton.',
+    params: { uid: 'string* (Firebase UID)' },
+  },
+  {
+    name: 'users.updateProfile',
+    description: 'Ubah nama/username tampilan user.',
+    params: { uid: 'string*', name: 'string opsional', username: 'string opsional' },
+  },
+  {
+    name: 'bans.list',
+    description: 'Daftar ban/suspend + filter (tanpa sweep otomatis).',
+    params: {
+      active: 'boolean opsional (true=aktif saja)',
+      type: 'ban|suspend opsional',
+      search: 'string opsional (email/nama/uid)',
+      page: 'number (default 1)',
+      limit: 'number 1-50 (default 20)',
+    },
+  },
+  {
+    name: 'premium.active',
+    description: 'Daftar user premium aktif + paket terakhir.',
+    params: { search: 'string opsional', page: 'number (default 1)', limit: 'number 1-50 (default 20)' },
+  },
+  {
+    name: 'premium.history',
+    description: 'Riwayat pemberian/pencabutan premium.',
+    params: { search: 'string opsional', page: 'number (default 1)', limit: 'number 1-50 (default 20)' },
+  },
+  {
+    name: 'badges.list',
+    description: 'Daftar definisi badge + jumlah pemakai.',
+    params: {},
+  },
+  {
+    name: 'badges.create',
+    description: 'Buat definisi badge baru.',
+    params: {
+      name: 'string* (huruf besar, unik)',
+      description: 'string opsional',
+      color: 'string hex #RRGGBB (default #8B5CF6)',
+      type: 'role|achievement|special|verification (default role)',
+    },
+  },
+  {
+    name: 'badges.update',
+    description: 'Ubah definisi badge (nama tidak bisa diubah).',
+    params: {
+      id: 'string* (ID badge)',
+      description: 'string opsional',
+      color: 'string hex #RRGGBB opsional',
+      type: 'role|achievement|special|verification opsional',
+      isActive: 'boolean opsional',
+    },
+  },
+  {
+    name: 'badges.delete',
+    description: 'Hapus definisi badge + lepas dari semua pemakai.',
+    params: { id: 'string* (ID badge)' },
+  },
+  {
+    name: 'announcements.update',
+    description: 'Ubah/tayangkan/hentikan pengumuman.',
+    params: {
+      id: 'string* (ID pengumuman)',
+      title: 'string opsional',
+      content: 'string opsional',
+      type: 'info|warning|success|error opsional',
+      targetAudience: 'all|free|premium opsional',
+      isPublished: 'boolean opsional',
+      expiresAt: 'string tanggal ISO, atau null/kosong untuk hapus batas',
+    },
+  },
+  {
+    name: 'announcements.delete',
+    description: 'Hapus pengumuman.',
+    params: { id: 'string* (ID pengumuman)' },
+  },
+  {
+    name: 'app_updates.list',
+    description: 'Semua rilisan + rilisan tayang terbaru.',
+    params: {},
+  },
+  {
+    name: 'app_updates.update',
+    description: 'Ubah/tayangkan/tarik rilisan.',
+    params: {
+      id: 'string* (ID rilisan)',
+      versionName: 'string opsional',
+      apkUrl: 'string URL opsional',
+      changelog: 'string opsional',
+      mandatory: 'boolean opsional',
+      isPublished: 'boolean opsional',
+    },
+  },
+  {
+    name: 'app_updates.delete',
+    description: 'Hapus rilisan.',
+    params: { id: 'string* (ID rilisan)' },
+  },
+  {
+    name: 'stats.overview',
+    description: 'Statistik ringkas + user terbaru + ban terbaru (seperti Beranda).',
+    params: {},
+  },
 ]
 
 export async function GET() {
@@ -147,6 +274,29 @@ export async function POST(req: NextRequest) {
     ? `agent:${body.actor.trim().slice(0, 40)}`
     : 'agent'
   const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  const num = (v: unknown, def: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : def
+  }
+  const pageParams = () => {
+    const page = Math.max(1, Math.floor(num(params.page, 1)))
+    const limit = Math.min(50, Math.max(1, Math.floor(num(params.limit, 20))))
+    return { page, limit }
+  }
+  const paged = (page: number, limit: number, total: number) => ({
+    page,
+    limit,
+    total,
+    pages: Math.max(1, Math.ceil(total / limit)),
+  })
+  const escRx = (s: string) => ({
+    $regex: s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    $options: 'i',
+  })
+  const oid = (id: string) => {
+    if (!ObjectId.isValid(id)) throw new AgentError('ID tidak valid.')
+    return new ObjectId(id)
+  }
 
   try {
     switch (action) {
@@ -309,6 +459,373 @@ export async function POST(req: NextRequest) {
       case 'bans.revoke': {
         const { uid } = await revokeBanRecord(str(params.id))
         return NextResponse.json({ ok: true, data: { uid } })
+      }
+
+      case 'users.list': {
+        const { page, limit } = pageParams()
+        const search = str(params.search).trim()
+        const status = str(params.status)
+        const ands: Record<string, unknown>[] = []
+        if (search) {
+          const rx = escRx(search)
+          ands.push({ $or: [{ email: rx }, { name: rx }, { username: rx }, { uid: rx }] })
+        }
+        if (status === 'active') {
+          ands.push({ $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }] })
+        } else if (status === 'suspended' || status === 'banned') {
+          ands.push({ status })
+        } else if (status) {
+          throw new AgentError('status tidak valid.')
+        }
+        if (typeof params.premium === 'boolean') {
+          ands.push(params.premium ? { isPremium: true } : { isPremium: { $ne: true } })
+        }
+        const filter = ands.length > 0 ? { $and: ands } : {}
+        const Users = await appUsersCol()
+        const [docs, total] = await Promise.all([
+          Users.find(filter, {
+            projection: {
+              uid: 1, email: 1, name: 1, username: 1, isPremium: 1, premiumExpiresAt: 1,
+              status: 1, badgeText: 1, badgeColor: 1, level: 1, updatedAt: 1,
+            },
+          })
+            .sort({ _id: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .toArray(),
+          Users.countDocuments(filter),
+        ])
+        const users = toPlain(docs).map((u: Record<string, unknown>) => ({
+          ...u,
+          status: (u.status as string) || 'active',
+          joinedAt: joinedFromObjectId(u._id),
+        }))
+        return NextResponse.json({ ok: true, data: { users, pagination: paged(page, limit, total) } })
+      }
+
+      case 'users.detail': {
+        const uid = str(params.uid).trim()
+        if (!uid) throw new AgentError('uid wajib diisi.')
+        const Users = await appUsersCol()
+        const user = await Users.findOne({ uid })
+        if (!user) throw new UserNotFoundError(uid)
+        const db = await connectAppDB()
+        const [bookmarkCount, historyCount] = await Promise.all([
+          db.collection('bookmarks').countDocuments({ uid }),
+          db.collection('watch_history').countDocuments({ uid }),
+        ])
+        const plain = toPlain(user) as Record<string, unknown>
+        return NextResponse.json({
+          ok: true,
+          data: {
+            user: {
+              ...plain,
+              status: (plain.status as string) || 'active',
+              joinedAt: joinedFromObjectId(plain._id),
+              bookmarkCount,
+              historyCount,
+            },
+          },
+        })
+      }
+
+      case 'users.updateProfile': {
+        const uid = str(params.uid).trim()
+        const name = str(params.name).trim() || undefined
+        const username = str(params.username).trim() || undefined
+        if (!uid) throw new AgentError('uid wajib diisi.')
+        if (name === undefined && username === undefined) {
+          throw new AgentError('name / username minimal satu diisi.')
+        }
+        await updateUserProfile(uid, { name, username })
+        return NextResponse.json({ ok: true, data: { uid } })
+      }
+
+      case 'bans.list': {
+        const { page, limit } = pageParams()
+        const search = str(params.search).trim()
+        const type = str(params.type)
+        const filter: Record<string, unknown> = {}
+        if (typeof params.active === 'boolean') filter.isActive = params.active
+        if (type === 'ban' || type === 'suspend') filter.type = type
+        else if (type) throw new AgentError('type tidak valid.')
+        if (search) {
+          const rx = escRx(search)
+          filter.$or = [{ userEmail: rx }, { userName: rx }, { uid: rx }]
+        }
+        const Ban = await bansCol()
+        const [docs, total] = await Promise.all([
+          Ban.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).toArray(),
+          Ban.countDocuments(filter),
+        ])
+        return NextResponse.json({ ok: true, data: { bans: toPlain(docs), pagination: paged(page, limit, total) } })
+      }
+
+      case 'premium.active': {
+        const { page, limit } = pageParams()
+        const search = str(params.search).trim()
+        const filter: Record<string, unknown> = { isPremium: true }
+        if (search) {
+          const rx = escRx(search)
+          filter.$or = [{ email: rx }, { name: rx }, { username: rx }, { uid: rx }]
+        }
+        const Users = await appUsersCol()
+        const Grants = await premiumGrantsCol()
+        const [docs, total] = await Promise.all([
+          Users.find(filter, {
+            projection: { uid: 1, email: 1, name: 1, username: 1, premiumExpiresAt: 1 },
+          })
+            .sort({ premiumExpiresAt: 1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .toArray(),
+          Users.countDocuments(filter),
+        ])
+        const users = await Promise.all(
+          docs.map(async (u) => {
+            const last = await Grants.find({ uid: u.uid, action: 'grant' })
+              .sort({ createdAt: -1 })
+              .limit(1)
+              .toArray()
+            return { ...u, lastPlan: last[0]?.plan, lastBy: last[0]?.createdBy }
+          }),
+        )
+        return NextResponse.json({ ok: true, data: { users: toPlain(users), pagination: paged(page, limit, total) } })
+      }
+
+      case 'premium.history': {
+        const { page, limit } = pageParams()
+        const search = str(params.search).trim()
+        const filter: Record<string, unknown> = {}
+        if (search) {
+          const rx = escRx(search)
+          filter.$or = [{ userEmail: rx }, { userName: rx }, { uid: rx }]
+        }
+        const Grants = await premiumGrantsCol()
+        const [docs, total] = await Promise.all([
+          Grants.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).toArray(),
+          Grants.countDocuments(filter),
+        ])
+        return NextResponse.json({ ok: true, data: { grants: toPlain(docs), pagination: paged(page, limit, total) } })
+      }
+
+      case 'badges.list': {
+        const Badge = await badgesCol()
+        const Users = await appUsersCol()
+        const docs = await Badge.find({}).sort({ createdAt: -1 }).toArray()
+        const badges = await Promise.all(
+          docs.map(async (b) => ({
+            ...b,
+            assignedCount: await Users.countDocuments({ badgeText: b.name }),
+          })),
+        )
+        return NextResponse.json({ ok: true, data: { badges: toPlain(badges) } })
+      }
+
+      case 'badges.create': {
+        const name = str(params.name).trim().toUpperCase()
+        const description = str(params.description).trim()
+        const color = (str(params.color).trim() || '#8B5CF6').toUpperCase()
+        const type = str(params.type) || 'role'
+        if (!name) throw new AgentError('name wajib diisi.')
+        if (!HEX_RE.test(color)) throw new AgentError('color harus format #RRGGBB.')
+        if (!BADGE_TYPES.includes(type)) throw new AgentError('type tidak valid.')
+        const Badge = await badgesCol()
+        if (await Badge.findOne({ name }, { projection: { _id: 1 } })) {
+          throw new AgentError(`Badge "${name}" sudah ada.`)
+        }
+        const now = new Date()
+        const r = await Badge.insertOne({
+          name,
+          ...(description ? { description } : {}),
+          color,
+          type: type as BadgeType,
+          isActive: true,
+          createdBy: actor,
+          createdAt: now,
+          updatedAt: now,
+        })
+        return NextResponse.json({ ok: true, data: { id: String(r.insertedId) } }, { status: 201 })
+      }
+
+      case 'badges.update': {
+        const _id = oid(str(params.id))
+        const setDoc: Record<string, unknown> = { updatedAt: new Date() }
+        if (params.description !== undefined) setDoc.description = str(params.description)
+        if (params.isActive !== undefined) setDoc.isActive = params.isActive === true
+        if (params.color !== undefined) {
+          const color = str(params.color).trim().toUpperCase()
+          if (!HEX_RE.test(color)) throw new AgentError('color harus format #RRGGBB.')
+          setDoc.color = color
+        }
+        if (params.type !== undefined) {
+          if (!BADGE_TYPES.includes(str(params.type))) throw new AgentError('type tidak valid.')
+          setDoc.type = str(params.type)
+        }
+        const Badge = await badgesCol()
+        const res = await Badge.updateOne({ _id }, { $set: setDoc })
+        if (res.matchedCount === 0) throw new AgentError('Badge tidak ditemukan.')
+        return NextResponse.json({ ok: true, data: { id: String(_id) } })
+      }
+
+      case 'badges.delete': {
+        const _id = oid(str(params.id))
+        const Badge = await badgesCol()
+        const badge = await Badge.findOne({ _id })
+        if (!badge) throw new AgentError('Badge tidak ditemukan.')
+        await Badge.deleteOne({ _id })
+        const Users = await appUsersCol()
+        const cleared = await Users.updateMany(
+          { badgeText: badge.name },
+          { $unset: { badgeText: '', badgeColor: '' }, $set: { updatedAt: Date.now() } },
+        )
+        return NextResponse.json({ ok: true, data: { clearedCount: cleared.modifiedCount } })
+      }
+
+      case 'announcements.update': {
+        const _id = oid(str(params.id))
+        const A = await announcementsCol()
+        const existing = await A.findOne({ _id })
+        if (!existing) throw new AgentError('Pengumuman tidak ditemukan.')
+        const setDoc: Record<string, unknown> = { updatedAt: new Date() }
+        const unsetDoc: Record<string, ''> = {}
+        if (params.title !== undefined) {
+          const t = str(params.title).trim()
+          if (!t) throw new AgentError('title tidak boleh kosong.')
+          setDoc.title = t
+        }
+        if (params.content !== undefined) {
+          const c = str(params.content).trim()
+          if (!c) throw new AgentError('content tidak boleh kosong.')
+          setDoc.content = c
+        }
+        if (params.type !== undefined) {
+          if (!TYPES.includes(str(params.type))) throw new AgentError('type tidak valid.')
+          setDoc.type = str(params.type)
+        }
+        if (params.targetAudience !== undefined) {
+          if (!AUDIENCES.includes(str(params.targetAudience))) throw new AgentError('targetAudience tidak valid.')
+          setDoc.targetAudience = str(params.targetAudience)
+        }
+        if (params.isPublished !== undefined) {
+          const pub = params.isPublished === true
+          setDoc.isPublished = pub
+          if (pub && !existing.publishedAt) setDoc.publishedAt = new Date()
+        }
+        if (params.expiresAt !== undefined) {
+          const raw = str(params.expiresAt)
+          if (raw) {
+            const exp = new Date(raw)
+            if (Number.isNaN(+exp)) throw new AgentError('expiresAt tidak valid.')
+            setDoc.expiresAt = exp
+          } else {
+            unsetDoc.expiresAt = ''
+          }
+        }
+        const update: Record<string, unknown> = { $set: setDoc }
+        if (Object.keys(unsetDoc).length > 0) update.$unset = unsetDoc
+        await A.updateOne({ _id }, update)
+        const updated = await A.findOne({ _id })
+        return NextResponse.json({ ok: true, data: { announcement: toPlain(updated) } })
+      }
+
+      case 'announcements.delete': {
+        const _id = oid(str(params.id))
+        const A = await announcementsCol()
+        const res = await A.deleteOne({ _id })
+        if (res.deletedCount === 0) throw new AgentError('Pengumuman tidak ditemukan.')
+        return NextResponse.json({ ok: true, data: { id: String(_id) } })
+      }
+
+      case 'app_updates.list': {
+        const U = await appUpdatesCol()
+        const [docs, latest] = await Promise.all([
+          U.find({}).sort({ versionCode: -1 }).toArray(),
+          U.find({ isPublished: true }).sort({ versionCode: -1 }).limit(1).toArray(),
+        ])
+        return NextResponse.json({
+          ok: true,
+          data: { updates: toPlain(docs), latestPublished: toPlain(latest[0] ?? null) },
+        })
+      }
+
+      case 'app_updates.update': {
+        const _id = oid(str(params.id))
+        const U = await appUpdatesCol()
+        const existing = await U.findOne({ _id })
+        if (!existing) throw new AgentError('Rilisan tidak ditemukan.')
+        const setDoc: Record<string, unknown> = { updatedAt: new Date() }
+        if (params.versionName !== undefined) {
+          const v = str(params.versionName).trim()
+          if (!v) throw new AgentError('versionName tidak boleh kosong.')
+          setDoc.versionName = v
+        }
+        if (params.apkUrl !== undefined) {
+          const url = str(params.apkUrl).trim()
+          try {
+            const u = new URL(url)
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error()
+          } catch {
+            throw new AgentError('apkUrl tidak valid.')
+          }
+          setDoc.apkUrl = url
+        }
+        if (params.changelog !== undefined) setDoc.changelog = str(params.changelog)
+        if (params.mandatory !== undefined) setDoc.mandatory = params.mandatory === true
+        if (params.isPublished !== undefined) {
+          const pub = params.isPublished === true
+          setDoc.isPublished = pub
+          if (pub && !existing.publishedAt) setDoc.publishedAt = new Date()
+        }
+        await U.updateOne({ _id }, { $set: setDoc })
+        return NextResponse.json({ ok: true, data: { id: String(_id) } })
+      }
+
+      case 'app_updates.delete': {
+        const _id = oid(str(params.id))
+        const U = await appUpdatesCol()
+        const res = await U.deleteOne({ _id })
+        if (res.deletedCount === 0) throw new AgentError('Rilisan tidak ditemukan.')
+        return NextResponse.json({ ok: true, data: { id: String(_id) } })
+      }
+
+      case 'stats.overview': {
+        const AppUser = await appUsersCol()
+        const Ban = await bansCol()
+        const Announcement = await announcementsCol()
+        const Badge = await badgesCol()
+        const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+        const [total, premium, banned, suspended, active7d, activeBans, published, activeBadges] =
+          await Promise.all([
+            AppUser.countDocuments({}),
+            AppUser.countDocuments({ isPremium: true }),
+            AppUser.countDocuments({ status: 'banned' }),
+            AppUser.countDocuments({ status: 'suspended' }),
+            AppUser.countDocuments({ updatedAt: { $gte: weekAgo } }),
+            Ban.countDocuments({ isActive: true }),
+            Announcement.countDocuments({ isPublished: true }),
+            Badge.countDocuments({ isActive: true }),
+          ])
+        const recentUsersRaw = await AppUser.find(
+          {},
+          { projection: { uid: 1, email: 1, name: 1, username: 1, isPremium: 1, status: 1 } },
+        )
+          .sort({ _id: -1 })
+          .limit(5)
+          .toArray()
+        const recentUsers = toPlain(recentUsersRaw).map((u: Record<string, unknown>) => ({
+          ...u,
+          joinedAt: joinedFromObjectId(u._id),
+        }))
+        const recentBansRaw = await Ban.find({}).sort({ createdAt: -1 }).limit(5).toArray()
+        return NextResponse.json({
+          ok: true,
+          data: {
+            stats: { total, premium, banned, suspended, active7d, activeBans, published, activeBadges },
+            recentUsers,
+            recentBans: toPlain(recentBansRaw),
+          },
+        })
       }
 
       default:

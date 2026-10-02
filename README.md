@@ -28,9 +28,10 @@ Endpoint JSON agar AI/automasi bisa mengelola panel secara programatik.
 - `POST /agent` → `{"action": "...", "params": {...}, "actor": "nama-opsional"}`
   dengan header `Authorization: Bearer AGENT_API_KEY` (isi di env)
 
-Aksi: `ping`, `announcements.create/list`, `app_updates.publish/latest`,
-`users.lookup/setPremium/setBadge`, `bans.create/revoke`. Semua penulisan
-memakai logika yang sama dengan panel (ban ganda ditolak, status user ditulis,
+Aksi (26 total): `ping`, `stats.overview`, `users.lookup/list/detail/updateProfile/setPremium/setBadge`,
+`bans.create/revoke/list`, `premium.active/history`, `badges.list/create/update/delete`,
+`announcements.create/list/update/delete`, `app_updates.publish/list/latest/update/delete`.
+Semua penulisan memakai logika yang sama dengan panel (ban ganda ditolak, status user ditulis,
 riwayat dicatat). API key bisa dilihat admin di Pengaturan → Akses Agen AI.
 
 ## Teknologi
