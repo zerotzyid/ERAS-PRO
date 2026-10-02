@@ -52,6 +52,7 @@ export async function PUT(
 
     const body = await req.json().catch(() => null)
     const setDoc: Record<string, unknown> = { updatedAt: new Date() }
+    const unsetDoc: Record<string, ''> = {}
 
     if (body?.title !== undefined) {
       const title = String(body.title).trim()
@@ -88,11 +89,13 @@ export async function PUT(
         }
         setDoc.expiresAt = exp
       } else {
-        setDoc.expiresAt = null
+        unsetDoc.expiresAt = ''
       }
     }
 
-    await A.updateOne({ _id }, { $set: setDoc })
+    const update: Record<string, unknown> = { $set: setDoc }
+    if (Object.keys(unsetDoc).length > 0) update.$unset = unsetDoc
+    await A.updateOne({ _id }, update)
     const updated = await A.findOne({ _id })
     return NextResponse.json({ ok: true, announcement: toPlain(updated) })
   } catch (e) {

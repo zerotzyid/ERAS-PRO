@@ -14,9 +14,24 @@ langsung ke database asli aplikasi (MongoDB Atlas `rinova`).
 | Premium | Beri/perpanjang/cabut premium (bulanan/tahunan/lifetime), riwayat grant |
 | Badge | CRUD definisi badge + pasang/lepas badge ke user (tampil di profil & komentar aplikasi) |
 | Pengumuman | Buat/tayangkan/hentikan pengumuman per audiens (semua/gratis/premium) + kedaluwarsa |
+| Update App | Terbitkan versi baru (wajib/opsional + changelog + link APK) — aplikasi cek otomatis |
 | Pengaturan | Status koneksi DB, kelola akun admin/moderator, ganti password |
 
 Endpoint publik untuk aplikasi: `GET /api/public/announcements?isPremium=true&limit=5`
+Endpoint cek update: `GET /api/public/app-update?versionCode=1`
+
+## API Agen AI (`/agent`)
+
+Endpoint JSON agar AI/automasi bisa mengelola panel secara programatik.
+
+- `GET /agent` → manifest publik (daftar aksi + skema parameter, tanpa auth)
+- `POST /agent` → `{"action": "...", "params": {...}, "actor": "nama-opsional"}`
+  dengan header `Authorization: Bearer AGENT_API_KEY` (isi di env)
+
+Aksi: `ping`, `announcements.create/list`, `app_updates.publish/latest`,
+`users.lookup/setPremium/setBadge`, `bans.create/revoke`. Semua penulisan
+memakai logika yang sama dengan panel (ban ganda ditolak, status user ditulis,
+riwayat dicatat). API key bisa dilihat admin di Pengaturan → Akses Agen AI.
 
 ## Teknologi
 
@@ -24,6 +39,7 @@ Endpoint publik untuk aplikasi: `GET /api/public/announcements?isPremium=true&li
 - Driver MongoDB native (ringan, Vercel-friendly) — dua koneksi: `ADMIN_DB` (akun panel) + `APP_DB` (data aplikasi)
 - Sesi JWT (cookie httpOnly) via `jose` — tanpa dependency auth berat, edge-safe
 - Tanpa cron/scheduler: kedaluwarsa ban/suspend/premium/pengumuman dicek **lazy** setiap data dibaca
+- Field tanggal opsional selalu disimpan **tanpa nilai** bila kosong (bukan null) agar filter tanggal akurat
 
 ## Jalankan lokal
 
@@ -58,11 +74,16 @@ Agar ban & pengumuman berlaku di HP (`E:\ZEROPROTOTYPE\RINOVA-APP`):
   - `fetchAnnouncements(isPremium)` membaca koleksi `announcements` langsung.
 - `core/premium/PremiumManager.kt` — cache offline memakai `premiumExpiresAt`.
 - `ui/components/RemoteControlOverlays.kt` (baru) — dialog blokir (wajib keluar)
-  + dialog pengumuman (sekali per item, dilacak via DataStore).
-- `ui/screens/MainScreen.kt` — menampung kedua overlay + fetch pengumuman saat login.
+  + dialog pengumuman (sekali per item, dilacak via DataStore)
+  + dialog update (`AppUpdateDialog`: wajib = blokir + tombol unduh, opsional = bisa "Nanti").
+- `ui/screens/MainScreen.kt` — menampung ketiga overlay (prioritas: hukuman > update > pengumuman)
+  + cek update saat login (bandingkan `versionCode` terpasang vs rilisan tayang).
 
 Field baru di `rinova.users` (ditulis web, dibaca app): `status`, `banReason`,
 `bannedAt`, `banExpiresAt`, `premiumExpiresAt`. Field lama tidak diubah.
+
+Koleksi baru (ditulis web, dibaca app): `app_updates` — `versionCode`,
+`versionName`, `apkUrl`, `changelog`, `mandatory`, `isPublished`.
 
 ## Skrip
 

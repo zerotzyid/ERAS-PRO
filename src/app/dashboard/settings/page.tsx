@@ -32,6 +32,10 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [adminDb, setAdminDb] = useState<DbInfo | null>(null)
   const [appDb, setAppDb] = useState<DbInfo | null>(null)
+  const [agentEndpoint, setAgentEndpoint] = useState('/agent')
+  const [agentKey, setAgentKey] = useState<string | null>(null)
+  const [agentConfigured, setAgentConfigured] = useState(false)
+  const [showKey, setShowKey] = useState(false)
 
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState({ email: '', name: '', password: '', role: 'moderator' })
@@ -55,6 +59,9 @@ export default function SettingsPage() {
       setAdmins(aData.admins)
       setAdminDb(sData.adminDb)
       setAppDb(sData.appDb)
+      setAgentEndpoint(sData.agent?.endpoint || '/agent')
+      setAgentKey(typeof sData.agent?.apiKey === 'string' ? sData.agent.apiKey : null)
+      setAgentConfigured(!!sData.agent?.configured)
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Gagal memuat pengaturan.', 'error')
     } finally {
@@ -165,6 +172,53 @@ export default function SettingsPage() {
               </code>
             </div>
           ))}
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <h2 className="font-semibold">Akses Agen AI</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Endpoint <code className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-slate-200">{agentEndpoint}</code>{' '}
+          memungkinkan AI/automasi mengelola panel via API key. Buka manifest publik untuk daftar aksi.
+        </p>
+        <div className="mt-3 rounded-lg bg-slate-800/60 px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-slate-400">Status:</span>
+            <Chip color={agentConfigured ? 'green' : 'red'}>
+              {agentConfigured ? 'Aktif' : 'Belum dikonfigurasi (isi AGENT_API_KEY)'}
+            </Chip>
+          </div>
+          {agentKey ? (
+            <div className="mt-2">
+              <p className="text-xs text-slate-500">API key (rahasia — hanya terlihat oleh admin):</p>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="flex-1 truncate rounded bg-slate-900 px-2 py-1 font-mono text-xs text-amber-300">
+                  {showKey ? agentKey : '•'.repeat(24)}
+                </code>
+                <Button size="sm" variant="secondary" onClick={() => setShowKey((v) => !v)}>
+                  {showKey ? 'Sembunyikan' : 'Tampilkan'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(agentKey).catch(() => {})
+                    toast('API key disalin.')
+                  }}
+                >
+                  Salin
+                </Button>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Contoh pakai (curl):</p>
+              <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-2 py-1 font-mono text-[11px] text-slate-300">
+                {'curl -X POST /agent -H "Authorization: Bearer $AGENT_API_KEY" -H "Content-Type: application/json" -d \'{"action":"ping"}\''}
+              </code>
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">
+              API key hanya ditampilkan untuk role admin.
+            </p>
+          )}
         </div>
       </Card>
 

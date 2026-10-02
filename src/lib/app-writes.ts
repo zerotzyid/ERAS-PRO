@@ -35,10 +35,22 @@ export async function setUserPremium(
   const now = Date.now()
 
   if (opts.isPremium) {
-    const setDoc: Record<string, unknown> = { isPremium: true, updatedAt: now }
-    if (opts.expiresAt) setDoc.premiumExpiresAt = opts.expiresAt
-    else setDoc.premiumExpiresAt = null
-    await Users.updateOne({ uid }, { $set: setDoc })
+    // Lifetime = field premiumExpiresAt TIDAK ADA (jangan null/undefined —
+    // driver menyimpan keduanya sebagai BSON Null dan merusak filter tanggal).
+    if (opts.expiresAt) {
+      await Users.updateOne(
+        { uid },
+        { $set: { isPremium: true, premiumExpiresAt: opts.expiresAt, updatedAt: now } },
+      )
+    } else {
+      await Users.updateOne(
+        { uid },
+        {
+          $set: { isPremium: true, updatedAt: now },
+          $unset: { premiumExpiresAt: '' },
+        },
+      )
+    }
   } else {
     await Users.updateOne(
       { uid },
@@ -52,9 +64,9 @@ export async function setUserPremium(
     userEmail: user.email,
     userName: user.name ?? user.username,
     action: opts.isPremium ? 'grant' : 'revoke',
-    plan: opts.isPremium ? opts.plan : undefined,
-    expiresAt: opts.isPremium ? (opts.expiresAt ?? undefined) : undefined,
-    note: opts.note,
+    ...(opts.isPremium && opts.plan ? { plan: opts.plan } : {}),
+    ...(opts.isPremium && opts.expiresAt ? { expiresAt: opts.expiresAt } : {}),
+    ...(opts.note ? { note: opts.note } : {}),
     createdBy: opts.by,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -81,19 +93,23 @@ export async function setUserStatus(
       },
     )
   } else {
+    // Suspend berjangka: banExpiresAt = Date. Selain itu field TIDAK ADA
+    // (jangan null — merusak perbandingan tanggal di query).
     const setDoc: Record<string, unknown> = {
       status: opts.status,
       banReason: opts.reason ?? '',
       bannedAt: new Date(),
       updatedAt: now,
     }
-    // banExpiresAt ditulis agar aplikasi bisa melepas suspend kedaluwarsa sendiri.
+    const unsetDoc: Record<string, ''> = {}
     if (opts.status === 'suspended' && opts.expiresAt) {
       setDoc.banExpiresAt = opts.expiresAt
     } else {
-      await Users.updateOne({ uid }, { $unset: { banExpiresAt: '' } })
+      unsetDoc.banExpiresAt = ''
     }
-    await Users.updateOne({ uid }, { $set: setDoc })
+    const update: Record<string, unknown> = { $set: setDoc }
+    if (Object.keys(unsetDoc).length > 0) update.$unset = unsetDoc
+    await Users.updateOne({ uid }, update)
   }
 }
 

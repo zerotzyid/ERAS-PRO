@@ -38,6 +38,13 @@ export async function GET() {
       adminDb: { name: adminDbName, uri: maskUri(rawUri), connected: adminPing },
       appDb: { name: appDbName, uri: maskUri(rawAppUri), connected: appPing },
       publicApi: '/api/public/announcements',
+      publicUpdateApi: '/api/public/app-update',
+      agent: {
+        endpoint: '/agent',
+        // Kunci hanya ditampilkan ke role admin (bukan moderator).
+        apiKey: staff.role === 'admin' ? process.env.AGENT_API_KEY || '' : undefined,
+        configured: !!(process.env.AGENT_API_KEY || ''),
+      },
       version: '1.0.0',
     })
   } catch (e) {

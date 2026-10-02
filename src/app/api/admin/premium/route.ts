@@ -8,12 +8,18 @@ import { toPlain } from '@/lib/serialize'
 /**
  * Cabut otomatis premium yang sudah lewat tanggal (lazy, tanpa cron).
  * Dijalankan setiap tab premium dibuka.
+ * Hanya premiumExpiresAt bertipe Date yang diproses (lifetime = field tak ada).
  */
 async function sweepExpiredPremium() {
   const Users = await appUsersCol()
+  await Users.updateMany(
+    { isPremium: true, premiumExpiresAt: { $exists: true, $not: { $type: 'date' } } },
+    { $unset: { premiumExpiresAt: '' } },
+  ).catch(() => {})
+
   const now = new Date()
   const expired = await Users.find(
-    { isPremium: true, premiumExpiresAt: { $lte: now } },
+    { isPremium: true, premiumExpiresAt: { $type: 'date', $lte: now } },
     { projection: { uid: 1, email: 1, name: 1, username: 1 } },
   ).toArray()
 

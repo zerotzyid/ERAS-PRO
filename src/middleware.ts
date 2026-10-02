@@ -23,9 +23,11 @@ async function readRole(req: NextRequest): Promise<string | null> {
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  // Endpoint login/logout/me & API publik aplikasi: selalu boleh.
+  // Endpoint login/logout/me, API publik aplikasi, & API agen AI: selalu boleh
+  // (otorisasi ditangani masing-masing handler: sesi / API key).
   if (pathname.startsWith('/api/auth')) return NextResponse.next()
   if (pathname.startsWith('/api/public')) return NextResponse.next()
+  if (pathname === '/agent') return NextResponse.next()
 
   const role = await readRole(req)
   const loggedIn = role !== null

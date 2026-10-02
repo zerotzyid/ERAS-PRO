@@ -7,6 +7,7 @@ import {
   Ban,
   Bell,
   ChevronDown,
+  Download,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -26,6 +27,7 @@ const navItems = [
   { href: '/dashboard/premium', label: 'Premium', icon: Star },
   { href: '/dashboard/badges', label: 'Badge', icon: Tag },
   { href: '/dashboard/announcements', label: 'Pengumuman', icon: Bell },
+  { href: '/dashboard/updates', label: 'Update App', icon: Download },
   { href: '/dashboard/settings', label: 'Pengaturan', icon: Settings },
 ]
 

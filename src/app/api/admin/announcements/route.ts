@@ -9,9 +9,13 @@ const AUDIENCES = ['all', 'free', 'premium']
 /** Turunkan otomatis pengumuman yang sudah kedaluwarsa (lazy, tanpa cron). */
 async function sweepExpired() {
   const A = await announcementsCol()
+  await A.updateMany(
+    { expiresAt: { $exists: true, $not: { $type: 'date' } } },
+    { $unset: { expiresAt: '' } },
+  ).catch(() => {})
   const now = new Date()
   await A.updateMany(
-    { isPublished: true, expiresAt: { $lte: now } },
+    { isPublished: true, expiresAt: { $type: 'date', $lte: now } },
     { $set: { isPublished: false, updatedAt: now } },
   ).catch(() => {})
 }
@@ -83,8 +87,8 @@ export async function POST(req: NextRequest) {
       type,
       targetAudience,
       isPublished,
-      publishedAt: isPublished ? now : undefined,
-      expiresAt: expiresAt ?? undefined,
+      ...(isPublished ? { publishedAt: now } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
       createdBy: staff.email,
       createdAt: now,
       updatedAt: now,
